@@ -50,26 +50,27 @@ and exp =
 |   NilExp
 |   IntExp of int
 |   StringExp of string
-|   CallExp of {func: symbol, args: exp list}
+|   CallExp of {func: exp, args: exp list}
 |   OpExp of {left: exp, oper: oper, right: exp}
-|   RecordExp of {fields: (symbol * exp) list, typ: symbol}
+|   RecordExp of {fields: (symbol * exp) list, typ: ty}
 |   SeqExp of exp list
 |   AssignExp of {var: var, exp: exp}
 |   LetExp of {decs: dec list, body: exp}
-|   ArrayExp of {typ: symbol, size: exp, init: exp}
+|   ArrayExp of {typ: ty, size: exp, init: exp}
 
 and dec = 
     FunctionDec of fundec list
-|   VarDec of {name: symbol, escape: bool ref, typ: symbol option, init: exp}
+|   VarDec of {name: symbol, escape: bool ref, typ: ty option, init: exp}
 |   TypeDec of {name: symbol, ty: ty} list
 
 and ty = NameTy of symbol
     |    RecordTy of field list
     |    ArrayTy of symbol
+    |    FuncTy of ty list * ty
 
 and oper = PlusOp | MinusOp
-withtype field = {name: symbol, escape: bool ref, typ: symbol}
-and fundec = {name: symbol, params: field list, result: symbol option, body: exp}
+withtype field = {name: symbol, escape: bool ref, typ: ty}
+and fundec = {name: symbol, params: field list, result: ty option, body: exp}
 end
 
 (* Types *)
@@ -84,6 +85,7 @@ struct
             |   NIL
             |   UNIT
             |   NAME of Symbol.symbol * ty option ref
+            |   FUNCTION of ty list * ty
 end
 
 (* Environment *)
@@ -92,7 +94,7 @@ sig
   (* type access *)
   (* type ty *)
   datatype enventry = VarEntry of {ty:Types.ty}
-                    | FunEntry of {formals: Types.ty list, result: Types.ty}
+                    | FunEntry of {ty:Types.ty}
   val base_tenv : Types.ty Symbol.table (*predefined types*)
   val base_venv : enventry Symbol.table (*predefined functions*)
 end
@@ -101,7 +103,7 @@ structure Env :> ENV =
 struct
     type ty = Types.ty
     datatype enventry = VarEntry of {ty: ty}
-                    |   FunEntry of {formals: ty list, result: ty}
+                    |   FunEntry of {ty: ty}
     
     val base_tenv = Symbol.empty
     val base_venv = Symbol.empty

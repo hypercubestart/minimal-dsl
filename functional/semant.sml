@@ -60,14 +60,14 @@ struct
           | trexp(A.StringExp string) = 
                   {exp=(), ty=Types.STRING}
           | trexp(A.CallExp{func, args}) =
-              let val SOME(enventry) = S.look(venv, func)
+              let val {exp, ty} = trexp(func)
                 in (
-                  case enventry of E.VarEntry{ty} => (print "not a func!!\n"; {exp=(), ty=Types.NIL})
-                                |  E.FunEntry{formals, result} =>
+                  case ty of Types.FUNCTION(formals, result) => 
                     let val argExps = map trexp args
                         val argTypes = map #ty argExps
-                    in (checkCallTypes(argTypes, formals); {exp=(), ty=Types.INT})
+                    in (checkCallTypes(argTypes, formals); {exp=(), ty=result})
                     end
+                  | _ => (print "not a func!!\n"; {exp=(), ty=Types.NIL})
                 ) 
               end
           | trexp(A.OpExp{left, oper, right}) =
@@ -75,7 +75,7 @@ struct
                   checkInt(trexp right);
                   {exp=(), ty=Types.INT})
           | trexp(A.RecordExp{fields, typ}) = (* FIX THIS! only checks exp fields in record type *)
-              let val SOME(Types.RECORD(record_field, unique)) = S.look(tenv, typ)
+              let val Types.RECORD(record_field, unique) = transTy(tenv, typ)
                   fun checkField(symbol, exp) = 
                     let fun filterEqual(field_name: S.symbol, ty: ty) = symbol = field_name
                         val record_type: (Symbol.symbol * ty) list = List.filter filterEqual record_field
@@ -103,7 +103,7 @@ struct
               end
           | trexp(A.ArrayExp{typ, size, init}) = (* FIX THIS *)
               let val {exp, ty} = trexp(init)
-                  val SOME(array_ty) = S.look(tenv, typ)
+                  val array_ty = transTy(tenv, typ)
                 in if ty = array_ty then {exp=(), ty=Types.ARRAY(ty, ref(()))} else (print "ArrayExp init type fail"; {exp=(), ty=Types.NIL})
               end
 
@@ -111,6 +111,7 @@ struct
         and trvar(A.SimpleVar id) = 
             (case S.look(venv, id) of
               SOME(E.VarEntry{ty}) => {exp=(), ty=ty}
+            | SOME(E.FunEntry{ty}) => {exp=(), ty=ty}
             | NONE => (print ("-------------undefined variable" ^ S.name id);
                       {exp=(), ty=Types.NIL}))
           | trvar(A.FieldVar(var, symbol)) =
@@ -141,7 +142,7 @@ struct
         end 
   and transDec(venv, tenv, A.VarDec{name, typ, init=AbSyntax.NilExp, escape}) =
       (case typ of SOME(symbol) => 
-        let val SOME(ty) = S.look(tenv, symbol)
+        let val ty = transTy(tenv, symbol)
           in    {tenv=tenv,
               venv=S.enter(venv, name, E.VarEntry{ty=ty})}
         end
@@ -172,21 +173,17 @@ struct
     | transDec(venv, tenv, A.FunctionDec(fundecs)) =
     (* first process function header to handle recursive functions *)
       let
-        
         fun processFunctionHeader({name, params, result=SOME(rt), ...}: A.fundec, venv) = 
-          let val SOME(result_ty) = S.look(tenv, rt)
-              fun transparam{name, typ, escape} = case S.look(tenv, typ)
-                                      of SOME t => {name=name, ty=t}
+          let val result_ty = transTy(tenv, rt)
+              fun transparam{name, typ, escape} = {name=name, ty=transTy(tenv, typ)}
               val params' = map transparam params
-            in S.enter(venv, name, E.FunEntry({formals=map #ty params', result=result_ty})) 
+            in S.enter(venv, name, E.FunEntry({ty = Types.FUNCTION(map #ty params', result_ty)})) 
           end
         val venv' = foldr processFunctionHeader venv fundecs
 
         fun checkFunction({params, result=SOME(rt), body, ...}: A.fundec, venv) = 
           let 
-            val SOME(result_ty) = S.look(tenv, rt)
-            fun transparam{name, typ, escape} = case S.look(tenv, typ)
-                                      of SOME t => {name=name, ty=t}
+            fun transparam{name, typ, escape} = {name=name, ty=transTy(tenv, typ)}
             val params' = map transparam params
             fun enterparam({name, ty}, venv) = S.enter(venv, name, E.VarEntry{ty=ty})
             val venv'' = foldr enterparam venv' params'
@@ -208,9 +205,15 @@ struct
     | transTy(tenv, AbSyntax.RecordTy(fields)) = 
         let val unique = ref(())
             fun mapper(field: AbSyntax.field) = 
-              let val SOME(ty) = S.look(tenv, #typ field)
+              let val ty = transTy(tenv, #typ field)
                 in (#name field, ty)
               end
           in Types.RECORD(map mapper fields, unique)
+        end
+    | transTy(tenv, AbSyntax.FuncTy(formals, result)) =
+        let fun mapper(ty) = transTy(tenv, ty)
+            val formals = map mapper formals
+            val result = transTy(tenv, result)
+        in Types.FUNCTION(formals, result)
         end
 end
