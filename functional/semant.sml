@@ -106,7 +106,13 @@ struct
                   val array_ty = transTy(tenv, typ)
                 in if ty = array_ty then {exp=(), ty=Types.ARRAY(ty, ref(()))} else (print "ArrayExp init type fail"; {exp=(), ty=Types.NIL})
               end
-
+          | trexp(A.IfExp{cond, first, second}) =
+              let val condExp = trexp(cond)
+                  val firstExp = trexp(first)
+                  val secondExp = trexp(second)
+              in (checkInt(condExp);
+                  if #ty firstExp = #ty secondExp then {exp=(), ty= #ty firstExp} else {exp=(), ty=Types.NIL})
+              end
           (* trvar *)
         and trvar(A.SimpleVar id) = 
             (case S.look(venv, id) of

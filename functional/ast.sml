@@ -57,6 +57,7 @@ and exp =
 |   AssignExp of {var: var, exp: exp}
 |   LetExp of {decs: dec list, body: exp}
 |   ArrayExp of {typ: ty, size: exp, init: exp}
+|   IfExp of {cond: exp, first: exp, second: exp}
 
 and dec = 
     FunctionDec of fundec list
@@ -68,7 +69,7 @@ and ty = NameTy of symbol
     |    ArrayTy of symbol
     |    FuncTy of ty list * ty
 
-and oper = PlusOp | MinusOp
+and oper = PlusOp | MinusOp | LessOp | LessEqualOp
 withtype field = {name: symbol, escape: bool ref, typ: ty}
 and fundec = {name: symbol, params: field list, result: ty option, body: exp}
 end
