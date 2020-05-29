@@ -79,3 +79,49 @@ body= A.CallExp{func=A.VarExp(A.SimpleVar(S.symbol "rec")), args=[A.IntExp(5)]}
 in 
   run(exp)
 end;
+
+(* let fun rec(i) = if 0 < i then 1 + rec2(i - 1) else 0
+       fun rec2(i) = if 0 < i then 1 + rec(i - 1) else 0
+in rec(5)
+end *)
+let val exp = A.LetExp({decs= [
+  A.FunctionDec([
+    {
+      name=S.symbol "rec", 
+      params=[{name=S.symbol "i", escape=ref true, typ=A.NameTy(S.symbol "int")}: A.field], 
+      result=SOME(A.NameTy(S.symbol "int")),
+      body=A.IfExp{
+        cond=A.OpExp{left=A.IntExp(0), oper=A.LessOp, right=A.VarExp(A.SimpleVar (S.symbol "i"))},
+        first=A.OpExp{
+          left=A.IntExp(1), 
+          oper=A.PlusOp, 
+          right=A.CallExp{func=A.VarExp(A.SimpleVar (S.symbol "rec2")), args=[
+            A.OpExp{left=A.VarExp(A.SimpleVar(S.symbol "i")), oper=A.MinusOp, right = A.IntExp(1)}
+          ]}
+        },
+        second = A.IntExp(0)
+      }
+    }: A.fundec,
+    {
+      name=S.symbol "rec2", 
+      params=[{name=S.symbol "i", escape=ref true, typ=A.NameTy(S.symbol "int")}: A.field], 
+      result=SOME(A.NameTy(S.symbol "int")),
+      body=A.IfExp{
+        cond=A.OpExp{left=A.IntExp(0), oper=A.LessOp, right=A.VarExp(A.SimpleVar (S.symbol "i"))},
+        first=A.OpExp{
+          left=A.IntExp(1), 
+          oper=A.PlusOp, 
+          right=A.CallExp{func=A.VarExp(A.SimpleVar (S.symbol "rec")), args=[
+            A.OpExp{left=A.VarExp(A.SimpleVar(S.symbol "i")), oper=A.MinusOp, right = A.IntExp(1)}
+          ]}
+        },
+        second = A.IntExp(0)
+      }
+    }: A.fundec
+  ])
+], 
+body= A.CallExp{func=A.VarExp(A.SimpleVar(S.symbol "rec")), args=[A.IntExp(5)]}
+})
+in 
+  run(exp)
+end;

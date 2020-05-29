@@ -22,17 +22,16 @@ struct
 
 (* TYPE CHECKING *)
   fun base_tenv() =
-    let val base_tenv: Types.ty S.table = S.empty
-        val base_tenv = S.enter(base_tenv, S.symbol "int", Types.INT)
-        val base_tenv = S.enter(base_tenv, S.symbol "string", Types.STRING)
-        val base_tenv = S.enter(base_tenv, S.symbol "nil", Types.NIL)
-        val base_tenv = S.enter(base_tenv, S.symbol "unit", Types.UNIT)
+    let val base_tenv: E.tenventry S.table = S.empty
+        val base_tenv = S.enter(base_tenv, S.symbol "int", E.TyConEntry{tycon=T.Int})
+        val base_tenv = S.enter(base_tenv, S.symbol "string", E.TyConEntry{tycon=T.String})
+        val base_tenv = S.enter(base_tenv, S.symbol "unit", E.TyConEntry{tycon=T.Unit})
       in base_tenv
     end
 
   fun type_check(exp) = 
-    let val base_venv: E.enventry S.table = S.empty
-        val base_tenv: Types.ty S.table = base_tenv()
+    let val base_venv: Types.ty S.table = S.empty
+        val base_tenv: E.tenventry S.table = base_tenv()
     in 
       Semant.transExp(base_venv, base_tenv)(exp)
     end
@@ -42,10 +41,9 @@ struct
   |   transExp(venv, A.NilExp) = Evaluate.NilExp
   |   transExp(venv, A.IntExp(i)) = Evaluate.IntExp i
   |   transExp(venv, A.StringExp(s)) = Evaluate.StringExp s
-  |   transExp(venv, A.CallExp{func, args}) = 
+  |   transExp(venv, A.CallExp{func, args, tyargs}) = 
         let val Evaluate.FunctionExp(ref(SOME(fenv)), symbols, body) = transExp(venv, func)
-            fun mapper(arg) = transExp(venv, arg)
-            val args' = map mapper args
+            val args' = [transExp(venv, args)]
             val zip = zip(symbols, args')
             fun foldF((s, a), venv) = S.enter(venv, s, a)
             val venv' = foldr foldF fenv zip
@@ -61,7 +59,7 @@ struct
           | A.LessEqualOp => Evaluate.IntExp(if l <= r then 1 else 0)
         )
         end
-  |   transExp(venv, A.RecordExp{fields, typ}) =
+  |   transExp(venv, A.RecordExp{fields, typ, tyargs}) =
         let fun mapper(symbol, exp) = (symbol, transExp(venv, exp))
         in Evaluate.RecordExp(map mapper fields)
         end
@@ -118,8 +116,8 @@ struct
       end 
   and transDec(venv, A.FunctionDec(fundecs)) = 
       let fun single(fundec: A.fundec, venv) = (
-            let val formals = map #name (#params fundec)
-            in S.enter(venv, #name fundec, Evaluate.FunctionExp(ref(NONE), formals, #body fundec))
+            let val formal = #name (#param fundec)
+            in S.enter(venv, #name fundec, Evaluate.FunctionExp(ref(NONE), [formal], #body fundec))
             end
           )
           val venv' = foldr single venv fundecs

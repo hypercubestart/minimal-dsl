@@ -9,10 +9,12 @@ end
 structure Semant =
 struct
   type ty = Types.ty
-  type venv = Env.enventry Symbol.table
-  type tenv = ty Symbol.table
+  type venv = ty Symbol.table
+  type tenv = Env.tenventry Symbol.table
 
   type expty = {exp: Translate.exp, ty: Types.ty}
+  
+  val nexttyvar = ref 0
 
   (* transVar: venv * tenv * AbSyntax.var -> expty
   transExp: venv * tenv * AbSyntax.exp -> expty
@@ -21,205 +23,263 @@ struct
   structure A = AbSyntax
   structure S = Symbol
   structure E = Env
+  structure T = Types
 
-  fun checkInt({exp,ty}) = case ty of Types.INT => ()
+  fun checkInt(ty) = case ty of T.App(T.Int, []) => ()
                         |  _ => print "-----------------integer required\n";
 
-  fun actual_ty(ty) = case ty of Types.NAME(symbol, ref(SOME(t))) => t (*might not be right*)
-                                  |  _ => ty
 
-  fun checkCallTypes(argTypes, formals) = (
-    case argTypes of [] => (
-      case formals of [] => ()
-                    | f::fs => print "more parameters than arguments\n"
-    )
-    | x::xs => (
-      case formals of [] => print "more arguments than parameters"
-                    | f::fs => if x = f then checkCallTypes(xs,fs) else print "wrong argument type\n"
-    )
-  )
+  fun zip(a::al, b::bl) = (a,b)::zip(al, bl)
+  |   zip([], []) = []
 
-  fun printType(ty) =
-    case ty of Types.INT => print "INT"
-            |  Types.STRING => print "STRING"
-            |  Types.RECORD(fields, _) => 
-                  let fun mapper(symbol, ty) = printType(ty)
-                    in print ("RECORD"); map mapper fields; ()
-                  end
-            |  Types.ARRAY(_, _) => print "ARRAY"
-            |  Types.NIL => print "Types.NIL"
-            |  Types.UNIT => print "TYPES.UNIT"
-            |  Types.NAME(_, _) => print "TYPES.NAME"
+  fun newtypevar() = 
+    let val i = !nexttyvar
+    in nexttyvar := i + 1; i
+    end
+
+  fun newtyvarlist(n) =
+    if n > 0 then newtypevar()::newtyvarlist(n - 1) else []
+
+  (*for unify, generate tyvar->ty mapping*)
+  fun base_subst_tenv(v::vars, a::args) =
+        let
+          val tenv = base_subst_tenv(vars, args)
+        in
+          IntBinaryMap.insert(tenv, v, a)
+        end
+  |   base_subst_tenv([], []) = IntBinaryMap.empty
+
+  (*enter symbol -> E.tenventry into tenv*)
+  fun subst_tenv(tenv, v::vars, a::args) =
+        let
+          val tenv' = subst_tenv(tenv, vars, args)
+        in
+          S.enter(tenv', v, a)
+        end
+  |   subst_tenv(tenv, [], []) = tenv
+  
+  fun subst(T.Var(tyvar), tenv) = 
+    (case IntBinaryMap.find(tenv, tyvar) of SOME(ty) => ty
+    | NONE => T.Var(tyvar))
+  |   subst(T.Nil, tenv) = T.Nil
+  |   subst(T.App(T.TyFun(tyvars, t), tyargs), tenv) =
+        subst(subst(t, base_subst_tenv(tyvars, tyargs)), tenv)
+  |   subst(T.App(tycon, tyargs), tenv) = 
+        let
+          val tyargs' = map (fn x => subst(x, tenv)) tyargs
+        in
+          T.App(tycon, tyargs')
+        end
+  |   subst(T.Poly(tyvars, t), tenv) = 
+        let
+          val alphavars = newtyvarlist(length(tyvars))
+          val alphavars' = map (fn x => T.Var(x)) alphavars
+          val t' = subst(t, base_subst_tenv(tyvars, alphavars'))
+        in
+          T.Poly(alphavars, subst(t', tenv))
+        end
+
+  fun unify(T.App(T.Int, tyvars1), T.App(T.Int, tyvars2)) = unifylist(tyvars1, tyvars2)
+  |   unify(T.App(T.String, tyvars1), T.App(T.String, tyvars2)) = unifylist(tyvars1, tyvars2)
+  |   unify(T.App(T.Unit, tyvars1), T.App(T.Unit, tyvars2)) = unifylist(tyvars1, tyvars2)
+  |   unify(T.App(T.Arrow, tyvars1), T.App(T.Arrow, tyvars2)) = unifylist(tyvars1, tyvars2)
+  |   unify(T.App(T.Array, tyvars1), T.App(T.Array, tyvars2)) = unifylist(tyvars1, tyvars2)
+  |   unify(T.App(T.Record(f1), tyvars1), T.App(T.Record(f2), tyvars2)) = 
+        if f1 <> f2 then print("record fields cannot unify") else unifylist(tyvars1, tyvars2)
+  |   unify(T.App(T.TyFun(tyvars, ty), tyargs), t) =
+        unify(subst(ty, base_subst_tenv(tyvars, tyargs)), t)
+  |   unify(t, T.App(T.TyFun(tyvars, ty), tyargs)) = 
+        unify(subst(ty, base_subst_tenv(tyvars, tyargs)), t)
+  |   unify(T.App(T.Unique(tycon1, u1), tyargs1), T.App(T.Unique(tycon2, u2), tyargs2)) =
+        if u1 <> u2 then print("occurrence equivalence record failed") else unifylist(tyargs1, tyargs2)
+  |   unify(T.Poly(tyvars1, t1), T.Poly(tyvars2, t2)) = 
+        let
+          val tyvar = map (fn x => T.Var(x)) tyvars1
+        in
+          unify(t1, subst(t2, base_subst_tenv(tyvars2, tyvar)))
+        end
+  |   unify(T.Var(a), T.Var(b)) = 
+        if a <> b then print("diff tyvar") else ()
+  |   unify(T.Nil, T.App(T.Record(_), _)) = ()
+  |   unify(T.App(T.Record(_), _), T.Nil) = ()
+  |   unify(_, _) = print("unify failed")
+  and unifylist(t1::t1list, t2::t2list) = (unify(t1, t2); unifylist(t1list, t2list))
+  |   unifylist([], []) = ()
+
+  fun expand(T.App(T.TyFun(tyvars, ty), tyargs)) = expand(subst(ty, base_subst_tenv(tyvars, tyargs)))
+  |   expand(T.App(T.Unique(tycon, unique), tyargs)) = expand(T.App(tycon, tyargs))
+  |   expand(u) = u
 
   fun transExp(venv, tenv) = 
     let fun trexp(A.VarExp var) =
                   trvar(var)
-          | trexp (A.NilExp) = (print("trexp(A.NilExp) reached?!!?"); {exp=(), ty=Types.NIL})
-          | trexp(A.IntExp int) = 
-                  {exp=(), ty=Types.INT}
-          | trexp(A.StringExp string) = 
-                  {exp=(), ty=Types.STRING}
-          | trexp(A.CallExp{func, args}) =
-              let val {exp, ty} = trexp(func)
-                in (
-                  case ty of Types.FUNCTION(formals, result) => 
-                    let val argExps = map trexp args
-                        val argTypes = map #ty argExps
-                    in (checkCallTypes(argTypes, formals); {exp=(), ty=result})
-                    end
-                  | _ => (print "not a func!!\n"; {exp=(), ty=Types.NIL})
-                ) 
-              end
+          | trexp(A.NilExp) = T.Nil
+          | trexp(A.IntExp int) = T.App(T.Int, [])
+          | trexp(A.StringExp str) = T.App(T.String, [])
+          | trexp(A.CallExp{func, tyargs, args}) =
+            let
+              val tyargs' = map (fn x => transty(tenv, x)) tyargs
+              val tf = trexp(func)
+              val args' = trexp(args)
+              val T.Poly(vars, T.App(T.Arrow, [t1, t2])) = expand(tf)
+            in
+              (unify(args', subst(t1, base_subst_tenv(vars, tyargs'))); subst(t2, base_subst_tenv(vars, tyargs')))
+            end
           | trexp(A.OpExp{left, oper, right}) =
-                  (checkInt(trexp left);
-                  checkInt(trexp right);
-                  {exp=(), ty=Types.INT})
-          | trexp(A.RecordExp{fields, typ}) = (* FIX THIS! only checks exp fields in record type *)
-              let val Types.RECORD(record_field, unique) = transTy(tenv, typ)
-                  fun checkField(symbol, exp) = 
-                    let fun filterEqual(field_name: S.symbol, ty: ty) = symbol = field_name
-                        val record_type: (Symbol.symbol * ty) list = List.filter filterEqual record_field
-                      in case record_type of
-                        [] => print "field name not found"
-                      | x::[] => 
-                          let val trexp = trexp(exp)
-                            in if #ty trexp = actual_ty(#2 x) then () else (print "field type incorrect"; printType(#2 x); printType(#ty trexp))
-                          end
-                    end
-                in map checkField fields; {exp=(), ty = Types.RECORD(record_field, unique)}
+              (checkInt(trexp left);
+              checkInt(trexp right);
+              T.App(T.Int, []))
+          | trexp(A.RecordExp{fields, tyargs, typ}) =
+              let
+                val SOME(E.TyConEntry{tycon}) = S.look(tenv, typ)
+                val tyargs' = map (fn x => transty(tenv, x)) tyargs
+                val t = T.App(tycon, tyargs')
+                val T.App(T.Record(fieldnames), tys) = expand(t)
+              in
+                (List.tabulate(length(fields), (fn(i) => unify(List.nth(tys, i), trexp(#2(List.nth(fields, i))))));
+                t)
               end
           | trexp(A.SeqExp exp_list) =
-              let fun trSeqExp(exp_list) = 
-                  (case exp_list of [] => (print "SeqExp empty"; {exp=(), ty=Types.NIL})
+              let 
+                fun trSeqExp(exp_list) = 
+                  (case exp_list of [] => (print "SeqExp empty"; T.Nil)
                                  |  x::[] => trexp(x)
                                  |  x::xs => (trexp(x); trSeqExp(xs)))
-                in trSeqExp(exp_list)
+              in trSeqExp(exp_list)
               end
           | trexp(A.AssignExp{var, exp}) =
-                  trexp(exp)
+              trexp(exp)
           | trexp(A.LetExp{decs, body}) = 
-              let val {venv=venv', tenv=tenv'} = transDecs(venv,tenv,decs)
-                in transExp(venv',tenv') body
+              let 
+                fun transDec(dec, {venv,tenv}) = transdec(venv, tenv, dec)
+                val {venv=venv', tenv=tenv'} = foldl transDec {venv=venv, tenv=tenv} decs
+              in transExp(venv',tenv') body
               end
-          | trexp(A.ArrayExp{typ, size, init}) = (* FIX THIS *)
-              let val {exp, ty} = trexp(init)
-                  val array_ty = transTy(tenv, typ)
-                in if ty = array_ty then {exp=(), ty=Types.ARRAY(ty, ref(()))} else (print "ArrayExp init type fail"; {exp=(), ty=Types.NIL})
-              end
+          | trexp(A.ArrayExp{typ, size, init}) = (print "ArrayExp reached??"; T.Nil) (*FIX THIS!*)
           | trexp(A.IfExp{cond, first, second}) =
               let val condExp = trexp(cond)
                   val firstExp = trexp(first)
                   val secondExp = trexp(second)
-              in (checkInt(condExp);
-                  if #ty firstExp = #ty secondExp then {exp=(), ty= #ty firstExp} else {exp=(), ty=Types.NIL})
+              in (checkInt(condExp); unify(firstExp, secondExp);
+                  firstExp)
               end
-          (* trvar *)
         and trvar(A.SimpleVar id) = 
             (case S.look(venv, id) of
-              SOME(E.VarEntry{ty}) => {exp=(), ty=ty}
-            | SOME(E.FunEntry{ty}) => {exp=(), ty=ty}
+              SOME(ty) => ty
             | NONE => (print ("-------------undefined variable" ^ S.name id);
-                      {exp=(), ty=Types.NIL}))
+                     T.Nil))
           | trvar(A.FieldVar(var, symbol)) =
-            let val {exp, ty} = trvar(var)
-              in case ty of Types.RECORD(fieldlist, unique) => 
-                let fun filterEqual(field_name: S.symbol, ty: ty) = symbol = field_name
-                    val filtered = List.filter filterEqual fieldlist
-                  in case filtered of [] => (print ("-------------undefined record field name");
-                                        {exp=(), ty=Types.NIL})
-                                |  x::[] => {exp=(), ty= #2 x}
+              (case expand(trvar(var)) of T.App(T.Record(fields), typs) => 
+                let 
+                  val zip = zip(fields, typs)
+                  val found = List.find (fn x => #1 x = symbol) zip
+                in case found of NONE => (print ("-------------undefined record field name");
+                                        T.Nil)
+                    | SOME((a,b)) => b
                 end
-                | _ => (print("record type required"); {exp=(), ty=Types.NIL})
-            end 
+              | _ => (print("record type required"); T.Nil))
           | trvar(A.SubscriptVar(var, exp)) =
               let val arr = trvar(var)
                   val subscript = trexp(exp)
                 in checkInt(subscript); 
-                   case #ty arr of Types.ARRAY(ty, unique)=> {exp=(), ty= #ty arr}
-                        |  _ => (print "-----------------array required\n"; {exp=(), ty=Types.NIL})
+                   case arr of T.App(T.Array, [ty])=> ty
+                        |  _ => (print "-----------------array required\n"; T.Nil)
               end
     in trexp
     end
-  (*transform declarations*)
-  and transDecs(venv, tenv, []) = {venv=venv, tenv=tenv}
-    | transDecs(venv, tenv, x::xs) = 
-        let val {venv=venv', tenv=tenv'} = transDec(venv, tenv, x) 
-          in transDecs(venv', tenv', xs)
-        end 
-  and transDec(venv, tenv, A.VarDec{name, typ, init=AbSyntax.NilExp, escape}) =
-      (case typ of SOME(symbol) => 
-        let val ty = transTy(tenv, symbol)
-          in    {tenv=tenv,
-              venv=S.enter(venv, name, E.VarEntry{ty=ty})}
-        end
-      | NONE => (print("NIL needs record type"); {tenv=tenv,venv=venv}))
-    | transDec(venv, tenv, A.VarDec{name, typ, init, escape}) = 
-      let val {exp,ty} = transExp(venv, tenv)(init)
-        in {tenv=tenv,
-            venv=S.enter(venv, name, E.VarEntry{ty=ty})}
-      end
-    | transDec(venv, tenv, A.TypeDec[{name, ty}]) = (* ONLY HANDES SINGLE TYPE DECLARATION *)
-    (* first enter type into tenv to handle recursive types *)
-      let val tenv' = S.enter(tenv, name, Types.NAME(name, ref NONE))
-          val ty = transTy(tenv', ty)
-          fun subst(tenv, Types.RECORD(recordList, unique)) = 
-            let fun mapper(symbol, ty) = subst(tenv, ty);
-              in map mapper recordList; ()
+  and transdec(venv, tenv, A.TypeDec(typedecs)) = (*fix mutual recursion*)
+        foldr (fn (dec, {venv, tenv}) => tydec(venv, tenv, dec)) {venv=venv, tenv=tenv} typedecs
+  | transdec(venv, tenv, A.FunctionDec(funcdecs)) =
+        let
+          fun func_header({name, tyvars, param, result, ...}: A.fundec, venv) = 
+            let
+              val tyv = newtyvarlist(length(tyvars))
+              val trans_tyv = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
+              val tenv' = subst_tenv(tenv, tyvars, trans_tyv)
+              val t1' = transty(tenv', #typ param)
+              val t2' = transty(tenv', result)
+            in
+              S.enter(venv, name, T.Poly(tyv, T.App(T.Arrow, [t1', t2'])))
             end
-            | subst(tenv, Types.NAME(symbol, ty_ref)) =
-              (case ty_ref of ref(NONE) =>
-                let val SOME(ty) = S.look(tenv, symbol)
-                  in ty_ref := SOME(ty); ()
-                end
-                              |  _ => ())
-            | subst(tenv, ty) = ()
-          val tenv'' = S.enter(tenv, name, ty)
-        in subst(tenv'', ty); {venv = venv, tenv = tenv''}
-      end
-    | transDec(venv, tenv, A.FunctionDec(fundecs)) =
-    (* first process function header to handle recursive functions *)
-      let
-        fun processFunctionHeader({name, params, result=SOME(rt), ...}: A.fundec, venv) = 
-          let val result_ty = transTy(tenv, rt)
-              fun transparam{name, typ, escape} = {name=name, ty=transTy(tenv, typ)}
-              val params' = map transparam params
-            in S.enter(venv, name, E.FunEntry({ty = Types.FUNCTION(map #ty params', result_ty)})) 
-          end
-        val venv' = foldr processFunctionHeader venv fundecs
+          val venv' = foldr func_header venv funcdecs
+          fun type_check({name, tyvars, param, result, body, ...}: A.fundec) =
+            let
+              val SOME(T.Poly(tyv, T.App(T.Arrow, [t1', t2']))) = S.look(venv', name)
+              val venv'' = S.enter(venv', #name param, t1')
+              val trans_tyv = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
+              val tenv' = subst_tenv(tenv, tyvars, trans_tyv)
+              val t3' = transExp(venv'', tenv')(body)
+            in
+              unify(t2', t3')
+            end
+        in
+          {tenv=tenv,
+          venv=venv'}
+        end
+  |   transdec(venv, tenv, A.VarDec{name, typ, init, escape}) = 
+        let
+          val t = transty(tenv, typ)
+        in
+          (unify(t, transExp(venv, tenv)(init)); 
+          {tenv=tenv,
+          venv=S.enter(venv, name, t)})
+        end
 
-        fun checkFunction({params, result=SOME(rt), body, ...}: A.fundec, venv) = 
-          let 
-            fun transparam{name, typ, escape} = {name=name, ty=transTy(tenv, typ)}
-            val params' = map transparam params
-            fun enterparam({name, ty}, venv) = S.enter(venv, name, E.VarEntry{ty=ty})
-            val venv'' = foldr enterparam venv' params'
-
-            in transExp(venv'', tenv) body;
-            venv
-          end
-      in foldr checkFunction venv' fundecs;
-        {venv=venv', tenv=tenv}
-      end
-  and transTy(tenv, AbSyntax.NameTy(symbol)) = 
-        let val SOME(ty) = S.look(tenv, symbol)
-          in ty
+  and tydec(venv, tenv, A.ArrayDec(name, tyvars, ty)) =
+        let
+          val unique = ref(())
+          val tyv = newtyvarlist(length(tyvars))
+          val trans_tyv = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
+          val tyc = T.TyFun(tyv, T.App(T.Array, [transty(subst_tenv(tenv, tyvars, trans_tyv), ty)]))
+        in
+          {venv=venv,
+          tenv=S.enter(tenv, name, E.TyConEntry{tycon=T.Unique(tyc, unique)})}
         end
-    | transTy(tenv, AbSyntax.ArrayTy(symbol)) =
-        let val SOME(ty) = S.look(tenv, symbol)
-          in ty
+  |   tydec(venv, tenv, A.RecordDec(name, tyvars, fields)) =
+        let
+          val unique = ref(())
+          val tyv = newtyvarlist(length(tyvars))
+          val trans_tyv = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
+          val record_fields = map (fn x => #name x) fields
+          val tenv' = subst_tenv(tenv, tyvars, trans_tyv)
+          val tys = map (fn x => transty(tenv', #typ x)) fields
+          val tyc = T.TyFun(tyv, T.App(T.Record(record_fields), tys))
+        in
+          {venv=venv,
+          tenv=S.enter(tenv, name, E.TyConEntry{tycon=T.Unique(tyc, unique)})}
         end
-    | transTy(tenv, AbSyntax.RecordTy(fields)) = 
-        let val unique = ref(())
-            fun mapper(field: AbSyntax.field) = 
-              let val ty = transTy(tenv, #typ field)
-                in (#name field, ty)
-              end
-          in Types.RECORD(map mapper fields, unique)
+  |   tydec(venv, tenv, A.ParametricDec(name, tyvars, ty)) =
+        let
+          val tyv = newtyvarlist(length(tyvars))
+          val trans_tyv = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
+          val tenv' = subst_tenv(tenv, tyvars, trans_tyv)
+        in
+          {venv=venv,
+          tenv=S.enter(tenv, name, E.TyConEntry{tycon=T.TyFun(tyv, transty(tenv', ty))})}
         end
-    | transTy(tenv, AbSyntax.FuncTy(formals, result)) =
-        let fun mapper(ty) = transTy(tenv, ty)
-            val formals = map mapper formals
-            val result = transTy(tenv, result)
-        in Types.FUNCTION(formals, result)
+  and transty(tenv, A.NameTy(id)) =
+        let val SOME(ty) = S.look(tenv, id)
+        in case ty of E.TyEntry{ty} => ty (* type variable *)
+          | E.TyConEntry{tycon} => (
+              case tycon of T.Int => T.App(tycon, [])
+              | T.String => T.App(tycon, [])
+              | T.Unit => T.App(tycon, [])
+          )
+        end
+  |   transty(tenv, A.FuncTy(formal, result)) = T.App(T.Arrow, [transty(tenv, formal), transty(tenv, result)])
+  |   transty(tenv, A.PolyTy(tyvars, ty)) = 
+        let
+          val tyv = newtyvarlist(length(tyvars))
+          val trans_tyv = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
+          val tenv' = subst_tenv(tenv, tyvars, trans_tyv)
+        in
+          T.Poly(tyv, transty(tenv', ty))
+        end
+  |   transty(tenv, A.TyCon(symbol, tyargs)) = 
+        let
+          val SOME(E.TyConEntry{tycon}) = S.look(tenv, symbol)
+          val tyargs' = map (fn x => transty(tenv, x)) tyargs
+        in
+          T.App(tycon, tyargs')
         end
 end

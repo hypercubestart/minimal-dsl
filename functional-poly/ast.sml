@@ -50,9 +50,9 @@ and exp =
 |   NilExp
 |   IntExp of int
 |   StringExp of string
-|   CallExp of {func: exp, tyargs: tyargs, args: exp list}
+|   CallExp of {func: exp, tyargs: tyargs, args: exp}
 |   OpExp of {left: exp, oper: oper, right: exp}
-|   RecordExp of {fields: (symbol * exp) list, tyargs: tyargs, typ: ty}
+|   RecordExp of {fields: (symbol * exp) list, tyargs: tyargs, typ: symbol}
 |   SeqExp of exp list
 |   AssignExp of {var: var, exp: exp}
 |   LetExp of {decs: dec list, body: exp}
@@ -61,19 +61,22 @@ and exp =
 
 and dec = 
     FunctionDec of fundec list
-|   VarDec of {name: symbol, escape: bool ref, typ: ty option, init: exp}
-|   TypeDec of {name: symbol, ty: ty} list
+|   VarDec of {name: symbol, escape: bool ref, typ: ty, init: exp}
+|   TypeDec of tydec list
+
+and tydec =
+    ParametricDec of symbol * tyvars * ty
+|   ArrayDec of symbol * tyvars * ty
+|   RecordDec of symbol * tyvars * field list
 
 and ty = NameTy of symbol
-    |    RecordTy of field list
-    |    ArrayTy of symbol
-    |    FuncTy of ty list * ty
+    |    FuncTy of ty * ty
     |    PolyTy of tyvars * ty
-    |    TyCon of ty * tyargs
+    |    TyCon of symbol * tyargs
 
 and oper = PlusOp | MinusOp | LessOp | LessEqualOp
 withtype field = {name: symbol, escape: bool ref, typ: ty}
-and fundec = {name: symbol, params: field list, result: ty option, body: exp}
+and fundec = {name: symbol, param: field, tyvars: symbol list, result: ty, body: exp}
 and tyvars = symbol list
 and tyargs = ty list
 end
@@ -96,7 +99,7 @@ struct
             | Record of symbol list
             | TyFun of tyvar list * ty
             | Unique of tycon * unique
-            
+  withtype tyvar = int    
 end
 
 (* Environment *)
@@ -106,8 +109,10 @@ sig
   (* type ty *)
   datatype enventry = VarEntry of {ty:Types.ty}
                     | FunEntry of {ty:Types.ty}
-  val base_tenv : Types.ty Symbol.table (*predefined types*)
-  val base_venv : enventry Symbol.table (*predefined functions*)
+  datatype tenventry = TyEntry of {ty:Types.ty}
+                    |  TyConEntry of {tycon: Types.tycon}
+  val base_tenv : tenventry Symbol.table (*predefined types*)
+  val base_venv : Types.ty Symbol.table (*predefined functions*)
 end
 
 structure Env :> ENV =
@@ -115,6 +120,8 @@ struct
     type ty = Types.ty
     datatype enventry = VarEntry of {ty: ty}
                     |   FunEntry of {ty: ty}
+    datatype tenventry = TyEntry of {ty: ty}
+                    |    TyConEntry of {tycon: Types.tycon}
     
     val base_tenv = Symbol.empty
     val base_venv = Symbol.empty
