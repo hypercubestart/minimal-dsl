@@ -85,6 +85,13 @@ struct
         in
           if condVal = 1 then transExp(venv, first) else transExp(venv, second)
         end
+  |   transExp(venv, A.IsNilExp(exp)) =
+        let
+          val exp = transExp(venv, exp)
+        in
+          case exp of Evaluate.NilExp => Evaluate.IntExp(1)
+          | _ => Evaluate.IntExp(0) 
+        end
   and trvar(venv, A.SimpleVar(symbol)) = 
         let
           val SOME(var) = S.look(venv, symbol)

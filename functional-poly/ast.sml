@@ -58,6 +58,7 @@ and exp =
 |   LetExp of {decs: dec list, body: exp}
 |   ArrayExp of {typ: ty, size: exp, init: exp}
 |   IfExp of {cond: exp, first: exp, second: exp}
+|   IsNilExp of exp
 
 and dec = 
     FunctionDec of fundec list
@@ -98,7 +99,7 @@ struct
             | Array
             | Record of symbol list
             | TyFun of tyvar list * ty
-            | Unique of tycon * unique
+            | Unique of tycon option ref * unique
   withtype tyvar = int    
 end
 

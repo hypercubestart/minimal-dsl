@@ -25,12 +25,27 @@ struct
   structure E = Env
   structure T = Types
 
+  exception TypeCheck
+
   fun checkInt(ty) = case ty of T.App(T.Int, []) => ()
                         |  _ => print "-----------------integer required\n";
 
 
   fun zip(a::al, b::bl) = (a,b)::zip(al, bl)
   |   zip([], []) = []
+
+  fun printType(T.Nil) = print "Nil"
+    | printType(T.App(tycon, tys)) = (print "App"; printTyCon(tycon))
+    | printType(T.Var(tyvar)) = print "Var"
+    | printType(T.Poly(tyvars, ty)) = print "Poly"
+  and printTyCon(T.Int) = print "Int"
+    | printTyCon(T.String) = print "String"
+    | printTyCon(T.Unit) = print "Unit"
+    | printTyCon(T.Arrow) = print "Arrow"
+    | printTyCon(T.Array) = print "Array"
+    | printTyCon(T.Record(fields)) = print "Record"
+    | printTyCon(T.TyFun(tyvs, ty)) = print "TyFun"
+    | printTyCon(T.Unique(ref(SOME(tycon)), unique)) = (print "Unique"; printTyCon(tycon))
 
   fun newtypevar() = 
     let val i = !nexttyvar
@@ -102,12 +117,17 @@ struct
         if a <> b then print("diff tyvar") else ()
   |   unify(T.Nil, T.App(T.Record(_), _)) = ()
   |   unify(T.App(T.Record(_), _), T.Nil) = ()
-  |   unify(_, _) = print("unify failed")
+  |   unify(a, b) = (printType(a); printType(b); print("unify failed"); raise TypeCheck)
   and unifylist(t1::t1list, t2::t2list) = (unify(t1, t2); unifylist(t1list, t2list))
   |   unifylist([], []) = ()
 
   fun expand(T.App(T.TyFun(tyvars, ty), tyargs)) = expand(subst(ty, base_subst_tenv(tyvars, tyargs)))
-  |   expand(T.App(T.Unique(tycon, unique), tyargs)) = expand(T.App(tycon, tyargs))
+  |   expand(T.App(T.Unique(tycon, unique), tyargs)) = 
+        let
+          val SOME(tycon) = !tycon
+        in
+          expand(T.App(tycon, tyargs))
+        end
   |   expand(u) = u
 
   fun transExp(venv, tenv) = 
@@ -163,6 +183,7 @@ struct
               in (checkInt(condExp); unify(firstExp, secondExp);
                   firstExp)
               end
+          | trexp(A.IsNilExp(exp)) = T.App(T.Int, [])
         and trvar(A.SimpleVar id) = 
             (case S.look(venv, id) of
               SOME(ty) => ty
@@ -216,6 +237,11 @@ struct
           {tenv=tenv,
           venv=venv'}
         end
+  |    transdec(venv, tenv, A.VarDec{name, typ, init=A.NilExp, escape}) = 
+        let val ty = transty(tenv, typ)
+          in {tenv=tenv,
+             venv=S.enter(venv, name, ty)}
+        end
   |   transdec(venv, tenv, A.VarDec{name, typ, init, escape}) = 
         let
           val t = transty(tenv, typ)
@@ -233,7 +259,7 @@ struct
           val tyc = T.TyFun(tyv, T.App(T.Array, [transty(subst_tenv(tenv, tyvars, trans_tyv), ty)]))
         in
           {venv=venv,
-          tenv=S.enter(tenv, name, E.TyConEntry{tycon=T.Unique(tyc, unique)})}
+          tenv=S.enter(tenv, name, E.TyConEntry{tycon=T.Unique(ref(SOME(tyc)), unique)})}
         end
   |   tydec(venv, tenv, A.RecordDec(name, tyvars, fields)) =
         let
@@ -241,12 +267,25 @@ struct
           val tyv = newtyvarlist(length(tyvars))
           val trans_tyv = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
           val record_fields = map (fn x => #name x) fields
-          val tenv' = subst_tenv(tenv, tyvars, trans_tyv)
-          val tys = map (fn x => transty(tenv', #typ x)) fields
+          val tenv' = S.enter(tenv, name, E.TyConEntry{tycon=T.Unique(ref(NONE), unique)})
+          val tenv'' = subst_tenv(tenv', tyvars, trans_tyv)
+          val tys = map (fn x => transty(tenv'', #typ x)) fields
           val tyc = T.TyFun(tyv, T.App(T.Record(record_fields), tys))
+          val tenv' = S.enter(tenv, name, E.TyConEntry{tycon=T.Unique(ref(SOME(tyc)), unique)})
+          fun subst(tenv', T.App(T.Unique(tyc, unique), tys)) =
+                (case !tyc of NONE => 
+                  let
+                    val SOME(E.TyConEntry{tycon}) = S.look(tenv', name)
+                    val T.Unique(ref(SOME(tycon)), unique) = tycon
+                  in
+                    tyc := SOME(tycon); ()
+                  end
+                | _ => ())
+            | subst(tenv', ty) = ()
         in
+          (map (fn x => subst(tenv', x)) tys;
           {venv=venv,
-          tenv=S.enter(tenv, name, E.TyConEntry{tycon=T.Unique(tyc, unique)})}
+          tenv=tenv'})
         end
   |   tydec(venv, tenv, A.ParametricDec(name, tyvars, ty)) =
         let
