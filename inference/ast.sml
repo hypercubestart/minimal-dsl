@@ -9,6 +9,8 @@ sig
   val empty : 'a table
   val enter : 'a table * symbol * 'a -> 'a table
   val look : 'a table * symbol -> 'a option
+  val listItems : 'a table -> 'a list
+  val contains: 'a table * symbol -> bool
 end
 
 structure Symbol :> SYMBOL = 
@@ -34,7 +36,13 @@ struct
     type 'a table = 'a IntBinaryMap.map
     val empty = IntBinaryMap.empty
     fun enter(t: 'a table, (s,n): symbol, a: 'a) = IntBinaryMap.insert(t,n,a)
-    fun look(t: 'a table, (s,n): symbol) = IntBinaryMap.find(t,n)                   
+    fun look(t: 'a table, (s,n): symbol) = IntBinaryMap.find(t,n)    
+    fun listItems(t: 'a table) = IntBinaryMap.listItems t     
+    fun contains(t: 'a table, s: symbol) = (
+        case look(t, s) of
+           SOME(_) => true
+        |  NONE => false
+    )          
 end
 (* --------------AST--------------- *)
 structure AbSyntax =
@@ -54,7 +62,6 @@ and exp =
 |   OpExp of {left: exp, oper: oper, right: exp}
 |   RecordExp of {fields: (symbol * exp) list, typ: symbol}
 |   SeqExp of exp list
-|   AssignExp of {var: var, exp: exp}
 |   LetExp of {decs: dec list, body: exp}
 |   ArrayExp of {typ: ty, size: exp, init: exp}
 |   IfExp of {cond: exp, first: exp, second: exp}
@@ -75,8 +82,8 @@ and ty = NameTy of symbol
     |    TyCon of symbol * tyargs
 
 and oper = PlusOp | MinusOp | LessOp | LessEqualOp
-withtype field = {name: symbol}
-and fundec = {name: symbol, param: field list, body: exp}
+withtype field = {name: symbol, typ: ty}
+and fundec = {name: symbol, param: symbol, body: exp}
 and tyvars = symbol list
 and tyargs = ty list
 end
@@ -92,6 +99,7 @@ struct
             |   Var of tyvar
             |   Meta of tymeta
             |   Poly of tyvar list * ty
+            |   Field of ty * ty
   and tycon = Int 
             | String 
             | Unit 

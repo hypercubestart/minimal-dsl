@@ -60,6 +60,9 @@ struct
     in nexttyvar := i + 1; i
     end
 
+  fun newmetavarlist(n) =
+    if n > 0 then newmetavar()::newmetavarlist(n - 1) else []
+
   fun newtypevar() = 
     let val i = !nexttyvar
     in nexttyvar := i + 1; i
@@ -179,7 +182,7 @@ struct
         val tMetaVars: (int,int) HashTable.hash_table = HashTable.mkTable(Word.fromInt, op=)(128, Fail "not found")
         val venvMetaVars: (int,int) HashTable.hash_table = HashTable.mkTable(Word.fromInt, op=)(128, Fail "not found")
         val dowork = getMetaVars(t, tMetaVars)
-        val dowork = map (fn x => getMetaVars(x, venvMetaVars)) (HashTable.listItems venv)
+        val dowork = map (fn x => getMetaVars(x, venvMetaVars)) (S.listItems venv)
         val dowork = map (fn x => Helper.removeIfContains(tMetaVars, x)) (HashTable.listItems venvMetaVars)
         val free_vars = HashTable.listItems tMetaVars
         val tyv = newtyvarlist(length(free_vars))
@@ -201,5 +204,62 @@ struct
       )
   |   getMetaVars(T.Poly(tyvars, ty), ht) = getMetaVars(ty, ht)
 
-  fun transdec(venv, tenv, A.FunctionDec[fundec])
+  and instantiate(T.Poly(tyvars, ty)) = 
+    let
+      val meta = newmetavarlist(length(tyvars))
+      val metavars = map (fn x => T.Meta(x)) meta
+      val base_tenv = base_subst_tenv(tyvars, metavars)
+    in
+      subst(ty, base_tenv)
+    end
+
+  fun transExp(venv, tenv) = 
+    let fun trexp(A.VarExp(var)) = trvar(var)
+          | trexp(A.NilExp) = T.Nil
+          | trexp(A.IntExp int) = T.App(T.Int, [])
+          | trexp(A.StringExp str) = T.App(T.String, [])
+          | trexp(A.CallExp{func, args}) = 
+              let
+                val functype = trexp(func)
+                val formal = trexp(args)
+                val result = T.Meta(newmetavar())
+              in
+                (unify(functype, T.App(T.Arrow, [formal, result])); result)
+              end
+          | trexp(A.OpExp{left, oper, right}) =
+              (checkInt(trexp left);
+              checkInt(trexp right);
+              T.App(T.Int, []))
+        and trvar(A.SimpleVar id) = 
+              let
+                val SOME(ty) = S.look(venv, id)
+              in
+                instantiate(ty)
+              end
+
+    in trexp
+    end
+
+  fun transdec(venv, tenv, A.FunctionDec[{name, param, body}]) = 
+    let
+      val formal = T.Meta(newmetavar())
+      val result = T.Meta(newmetavar())
+      val functy = T.App(T.Arrow, [formal, result])
+      val venv' = S.enter(venv, name, functy)
+      val venv' = S.enter(venv, param, formal)
+      val expty = transExp(venv', tenv)(body)
+    in
+      unify(result, expty);
+      {tenv=tenv,
+      venv=S.enter(venv, name, generalize(venv, functy))}
+    end
+  |   transdec(venv, tenv, A.VarDec{name, init}) =
+    (case transExp(venv, tenv)(init) of
+    T.Nil => (print("variable declaration with nil not allowed"); {tenv=tenv, venv=venv})
+    | ty => {tenv=tenv, 
+            venv=S.enter(venv, name, if S.contains(venv, name) then T.Poly([], ty) else generalize(venv, ty))}
+    )
+
+  and tydec(venv, tenv, A.RecordDec(symbol, tyvars, fields)) = 
+  
 end
