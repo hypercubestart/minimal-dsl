@@ -50,7 +50,7 @@ struct
 type symbol = Symbol.symbol
 
 datatype var = SimpleVar of symbol
-            |  FieldVar of var * symbol
+            |  FieldVar of exp * symbol
             |  SubscriptVar of var * exp
 
 and exp = 

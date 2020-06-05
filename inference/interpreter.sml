@@ -41,7 +41,7 @@ struct
   |   transExp(venv, A.NilExp) = Evaluate.NilExp
   |   transExp(venv, A.IntExp(i)) = Evaluate.IntExp i
   |   transExp(venv, A.StringExp(s)) = Evaluate.StringExp s
-  |   transExp(venv, A.CallExp{func, args, tyargs}) = 
+  |   transExp(venv, A.CallExp{func, args}) = 
         let val Evaluate.FunctionExp(ref(SOME(fenv)), symbols, body) = transExp(venv, func)
             val args' = [transExp(venv, args)]
             val zip = zip(symbols, args')
@@ -59,7 +59,7 @@ struct
           | A.LessEqualOp => Evaluate.IntExp(if l <= r then 1 else 0)
         )
         end
-  |   transExp(venv, A.RecordExp{fields, typ, tyargs}) =
+  |   transExp(venv, A.RecordExp{fields, typ}) =
         let fun mapper(symbol, exp) = (symbol, transExp(venv, exp))
         in Evaluate.RecordExp(map mapper fields)
         end
@@ -68,7 +68,6 @@ struct
         |   seqList(e::elist) = (transExp(venv, e); seqList(elist))
         in seqList(exps)
         end
-  |   transExp(venv, A.AssignExp{var, exp}) = Evaluate.NilExp (*NOT ALLOWING ASSIGN*)
   |   transExp(venv, A.LetExp{decs, body}) =
         let val venv' = transDecs(venv, decs)
         in  transExp(venv', body)
@@ -98,9 +97,9 @@ struct
         in
           var
         end
-  | trvar(venv, A.FieldVar(var, symbol)) = 
+  | trvar(venv, A.FieldVar(exp, symbol)) = 
         let
-          val Evaluate.RecordExp(record) = trvar(venv, var)
+          val Evaluate.RecordExp(record) = transExp(venv, exp)
           fun filterEquals(s,  exp) = s = symbol
           val fields = List.filter filterEquals record
         in
@@ -123,7 +122,7 @@ struct
       end 
   and transDec(venv, A.FunctionDec(fundecs)) = 
       let fun single(fundec: A.fundec, venv) = (
-            let val formal = #name (#param fundec)
+            let val formal = #param fundec
             in S.enter(venv, #name fundec, Evaluate.FunctionExp(ref(NONE), [formal], #body fundec))
             end
           )
@@ -136,9 +135,8 @@ struct
           )
       in foldr foldF venv' fundecs
       end
-  | transDec(venv, A.VarDec{name, escape, typ, init}) = S.enter(venv, name, transExp(venv, init))
+  | transDec(venv, A.VarDec{name, init}) = S.enter(venv, name, transExp(venv, init))
   | transDec(venv, A.TypeDec typedecs) = venv (*no op*)
-
 
   fun evaluate(exp) = 
     let val base_venv: Evaluate.exp S.table = S.empty

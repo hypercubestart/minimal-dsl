@@ -57,7 +57,7 @@ struct
 
   fun newmetavar() = 
     let val i = !nextmetavar
-    in nexttyvar := i + 1; i
+    in nextmetavar := i + 1; i
     end
 
   fun newmetavarlist(n) =
@@ -113,14 +113,14 @@ struct
         if Helper.contains(sigma_m, meta) then subst(HashTable.lookup sigma_m meta, tenv)
         else T.Meta(meta)
 
-  and occursin(T.Nil, meta) = true
+  and occursin(T.Nil, meta) = false
   |   occursin(T.App(tycon, tylist), meta) = 
         let
           val T.App(tycon', tys') = expand(T.App(tycon, tylist))
         in
-          foldl (fn(ty, bool) => bool andalso occursin(ty, meta)) true tys'
+          foldl (fn(ty, bool) => bool orelse occursin(ty, meta)) false tys'
         end
-  |   occursin(T.Var(tyvar), meta) = true
+  |   occursin(T.Var(tyvar), meta) = false
   |   occursin(T.Meta(tymeta), meta) = tymeta = meta
   |   occursin(T.Poly(tyvars, ty), meta) = occursin(ty, meta)
 
@@ -212,8 +212,9 @@ struct
     in
       subst(ty, base_tenv)
     end
+  |   instantiate(x) = x
 
-  fun transExp(venv, tenv) = 
+  fun transExp(venv: venv, tenv) = 
     let fun trexp(A.VarExp(var)) = trvar(var)
           | trexp(A.NilExp) = T.Nil
           | trexp(A.IntExp int) = T.App(T.Int, [])
@@ -227,32 +228,82 @@ struct
                 (unify(functype, T.App(T.Arrow, [formal, result])); result)
               end
           | trexp(A.OpExp{left, oper, right}) =
-              (checkInt(trexp left);
-              checkInt(trexp right);
+              (unify((trexp left), T.App(T.Int, []));
+              unify((trexp right), T.App(T.Int, []));
               T.App(T.Int, []))
+          | trexp(A.RecordExp{fields, typ}) = 
+              let
+                val SOME(E.TyConEntry{tycon=T.Unique(ref(SOME(T.TyFun(tyvars, ty))), z)}) 
+                      = S.look(tenv, typ)
+                val meta = newmetavarlist(length(tyvars))
+                val metavars = map (fn x => T.Meta(x)) meta
+                val tr' = subst(ty, base_subst_tenv(tyvars, metavars))
+                val T.App(T.Record(symbols), fieldtypes) = expand(tr')
+                val expfields = map (fn x => trexp(# 2 x)) fields
+              in
+                (unifylist(fieldtypes, expfields); tr')
+              end
+          | trexp(A.SeqExp exp_list) =
+              let 
+                fun trSeqExp(exp_list) = 
+                  (case exp_list of [] => (print "SeqExp empty"; T.Nil)
+                                 |  x::[] => trexp(x)
+                                 |  x::xs => (trexp(x); trSeqExp(xs)))
+              in trSeqExp(exp_list)
+              end
+          | trexp(A.LetExp{decs, body}) = 
+              let 
+                fun transDec(dec, {venv,tenv}) = transdec(venv, tenv, dec)
+                val {venv=venv', tenv=tenv'} = foldl transDec {venv=venv, tenv=tenv} decs
+              in transExp(venv',tenv') body
+              end
+          | trexp(A.IfExp{cond, first, second}) =
+              let val condExp = trexp(cond)
+                  val firstExp = trexp(first)
+                  val secondExp = trexp(second)
+              in (unify(condExp, T.App(T.Int, [])); unify(firstExp, secondExp);
+                  firstExp)
+              end
+          | trexp(A.IsNilExp(exp)) = T.App(T.Int, [])
         and trvar(A.SimpleVar id) = 
               let
                 val SOME(ty) = S.look(venv, id)
               in
                 instantiate(ty)
               end
-
+        |   trvar(A.FieldVar(record, symbol)) =
+              let
+                val recordTy = trexp(record)
+                val meta = T.Meta(newmetavar())
+                val SOME(E.TyEntry{ty}) = S.look(tenv, symbol)
+                val tfield = instantiate(ty)
+              in
+                (unify(tfield, T.Field(recordTy, meta)); meta)
+              end
     in trexp
     end
-
-  fun transdec(venv, tenv, A.FunctionDec[{name, param, body}]) = 
-    let
-      val formal = T.Meta(newmetavar())
-      val result = T.Meta(newmetavar())
-      val functy = T.App(T.Arrow, [formal, result])
-      val venv' = S.enter(venv, name, functy)
-      val venv' = S.enter(venv, param, formal)
-      val expty = transExp(venv', tenv)(body)
-    in
-      unify(result, expty);
-      {tenv=tenv,
-      venv=S.enter(venv, name, generalize(venv, functy))}
-    end
+  and transdec(venv, tenv, A.TypeDec(typedecs)) = (*fix mutual recursion*)
+        foldr (fn (dec, {venv, tenv}) => tydec(venv, tenv, dec)) {venv=venv, tenv=tenv} typedecs
+  |   transdec(venv, tenv, A.FunctionDec(fundecs)) = 
+        let
+          val formals = map (fn x => T.Meta(x)) (newmetavarlist(length(fundecs)))
+          val results = map (fn x => T.Meta(x)) (newmetavarlist(length(fundecs)))
+          val functys = List.tabulate(length(fundecs), 
+            (fn x => (List.nth(fundecs, x), List.nth(formals, x), List.nth(results, x)))
+          )
+          val venv' = foldl (fn((fundec, formal, result), venv) => S.enter(venv, #name fundec, T.App(T.Arrow, [formal, result]))) venv functys
+          fun processSingle((fundec: A.fundec, formal, result), venv) =
+            let
+              val venv'' = S.enter(venv', #param fundec, formal)
+              val expty = transExp(venv'', tenv)(#body fundec)
+            in
+              unify(result, expty);
+              S.enter(venv, #name fundec, generalize(venv, T.App(T.Arrow, [formal, result])))
+            end
+        in
+          {tenv=tenv, 
+          venv=foldl processSingle venv functys}
+        end
   |   transdec(venv, tenv, A.VarDec{name, init}) =
     (case transExp(venv, tenv)(init) of
     T.Nil => (print("variable declaration with nil not allowed"); {tenv=tenv, venv=venv})
@@ -260,6 +311,37 @@ struct
             venv=S.enter(venv, name, if S.contains(venv, name) then T.Poly([], ty) else generalize(venv, ty))}
     )
 
-  and tydec(venv, tenv, A.RecordDec(symbol, tyvars, fields)) = 
-  
+  and tydec(venv, tenv: tenv, A.RecordDec(symbol, tysymbols, fields)) = 
+    let
+      val unique = ref(())
+      val tyv = newtyvarlist(length(tysymbols))
+      val tyvars = map (fn x => E.TyEntry{ty=T.Var(x)}) tyv
+      val tenv' = subst_tenv(tenv, tysymbols, tyvars)
+      val fieldtys = map (fn x => transty(tenv', #typ x)) fields
+      val fieldnames = map #name fields
+      val recordTycon = T.Unique(ref(SOME(T.TyFun(tyv, T.App(T.Record(fieldnames), fieldtys)))), unique)
+      val tenv'' = S.enter(tenv, symbol, E.TyConEntry{tycon=recordTycon})
+      val recordTy = T.App(recordTycon, map (fn x => T.Var(x)) tyv)
+      val tenv'' = foldl (fn((fname, fty), tenv) => S.enter(tenv, fname, E.TyEntry{ty=T.Poly(tyv, T.Field(recordTy, fty))})) tenv'' (zip(fieldnames, fieldtys))
+    in
+      {venv=venv,
+      tenv=tenv''}
+    end
+  and transty(tenv, A.NameTy(id)) =
+        let val SOME(ty) = S.look(tenv, id)
+        in case ty of E.TyEntry{ty} => ty (* type variable *)
+          | E.TyConEntry{tycon} => (
+              case tycon of T.Int => T.App(tycon, [])
+              | T.String => T.App(tycon, [])
+              | T.Unit => T.App(tycon, [])
+          )
+        end
+  |   transty(tenv, A.FuncTy(formal, result)) = T.App(T.Arrow, [transty(tenv, formal), transty(tenv, result)])
+  |   transty(tenv, A.TyCon(symbol, tyargs)) = 
+        let
+          val SOME(E.TyConEntry{tycon}) = S.look(tenv, symbol)
+          val tyargs' = map (fn x => transty(tenv, x)) tyargs
+        in
+          T.App(tycon, tyargs')
+        end
 end
