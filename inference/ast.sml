@@ -69,7 +69,7 @@ and exp =
 
 and dec = 
     FunctionDec of fundec list
-|   VarDec of {name: symbol, init: exp}
+|   VarDec of {name: symbol, init: exp, typ: ty option}
 |   TypeDec of tydec list
 
 and tydec =

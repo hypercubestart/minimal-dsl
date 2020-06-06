@@ -135,7 +135,7 @@ struct
           )
       in foldr foldF venv' fundecs
       end
-  | transDec(venv, A.VarDec{name, init}) = S.enter(venv, name, transExp(venv, init))
+  | transDec(venv, A.VarDec{name, init, typ}) = S.enter(venv, name, transExp(venv, init))
   | transDec(venv, A.TypeDec typedecs) = venv (*no op*)
 
   fun evaluate(exp) = 
@@ -144,5 +144,5 @@ struct
     end
 
   (* we don't need to keep track venv/tenv because cannot be modified between statements *)
-  fun interpret(exp) = (type_check(exp); evaluate(exp))
+  fun interpret(exp) = (type_check(exp); print("\ntype checking done\n"); evaluate(exp))
 end
